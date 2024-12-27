@@ -321,4 +321,10 @@ pub mod ids {
 
         pub const ID: Pubkey = solana_sdk::pubkey!("5hMjmxexWu954pX9gB9jkHxMqdjpxArQS2XdvkaevRax");
     }
+
+    pub mod drift {
+        use solana_sdk::pubkey::Pubkey;
+
+        pub const ID: Pubkey = solana_sdk::pubkey!("dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH");
+    }
 }

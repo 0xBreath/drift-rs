@@ -12,7 +12,6 @@ else
     rustup override set 1.81.0 || exit 1
 fi
 
-#agave-install init 1.18.8 || exit 1
 agave-install init 2.0.8 || exit 1
 
 avm use 0.30.0
