@@ -251,7 +251,7 @@ pub async fn get_market_accounts_with_fallback<T: Market + AnchorDeserialize>(
         filters: Some(vec![get_market_filter(T::MARKET_TYPE)]),
         account_config: account_config.clone(),
         with_context: Some(true),
-        sort_results: None,
+        // sort_results: None,
     };
 
     // try 'getProgramAccounts'

@@ -150,7 +150,7 @@ impl GlobalUserMap {
             filters: Some(self.subscription.options.filters.clone()),
             account_config,
             with_context: Some(true),
-            sort_results: None,
+            // sort_results: None,
         };
 
         let response = self
