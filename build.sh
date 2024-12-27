@@ -6,10 +6,10 @@ home
 
 if [[ $(uname -m) == "arm64" ]]; then
     echo "Running on Apple Silicon"
-    rustup override set 1.76.0-x86_64-apple-darwin || exit 1
+    rustup override set 1.81.0-x86_64-apple-darwin || exit 1
 else
     echo "Not running on Apple Silicon"
-    rustup override set 1.76.0 || exit 1
+    rustup override set 1.81.0 || exit 1
 fi
 
 #agave-install init 1.18.8 || exit 1
