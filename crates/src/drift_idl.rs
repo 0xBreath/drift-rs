@@ -11,7 +11,9 @@ use anchor_lang::{
     },
     Discriminator,
 };
+use heck::{ToPascalCase, ToSnakeCase};
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey};
 pub mod traits {
     use solana_sdk::instruction::AccountMeta;
@@ -21,9 +23,66 @@ pub mod traits {
         fn to_account_metas(&self) -> Vec<AccountMeta>;
     }
 }
+pub mod decode {
+    use super::{types::*, *};
+    use heck::{ToPascalCase, ToSnakeCase};
+    use sha2::Digest;
+    pub fn ident_name<'a, T: ?Sized + 'a>() -> String {
+        let full_ident_name = std::any::type_name::<T>();
+        match full_ident_name.rsplit_once("::") {
+            Some((_path, ident_name)) => ident_name.to_string(),
+            None => full_ident_name.to_string(),
+        }
+    }
+    pub trait Decode: Sized {
+        #[doc = " Deserialize a program account into its defined (struct) type using Borsh."]
+        #[doc = " utf8 discriminator is the human-readable discriminator, such as \"User\", and usually the name"]
+        #[doc = " of the struct marked with the #[account] Anchor macro that derives the Discriminator trait."]
+        fn decode(data: &[u8]) -> std::result::Result<Self, Box<dyn std::error::Error>>;
+    }
+    pub trait NameToDiscrim: Sized {
+        #[doc = " Deserialize a program account into its defined (struct) type using Borsh."]
+        #[doc = " utf8 discriminator is the human-readable discriminator, such as \"User\", and usually the name"]
+        #[doc = " of the struct marked with the #[account] Anchor macro that derives the Discriminator trait."]
+        fn name_to_discrim(name: &str) -> std::result::Result<[u8; 8], Box<dyn std::error::Error>>;
+    }
+    pub trait DiscrimToName: Sized {
+        #[doc = " Deserialize a program account into its defined (struct) type using Borsh."]
+        #[doc = " utf8 discriminator is the human-readable discriminator, such as \"User\", and usually the name"]
+        #[doc = " of the struct marked with the #[account] Anchor macro that derives the Discriminator trait."]
+        fn discrim_to_name(
+            discrim: [u8; 8],
+        ) -> std::result::Result<String, Box<dyn std::error::Error>>;
+    }
+    pub(crate) fn sighash(namespace: &str, name: &str) -> [u8; 8] {
+        let preimage = format!("{namespace}:{name}");
+        let mut hasher = sha2::Sha256::default();
+        let mut sighash = <[u8; 8]>::default();
+        hasher.update(preimage.as_bytes());
+        let digest = hasher.finalize();
+        sighash.copy_from_slice(&digest.as_slice()[..8]);
+        sighash
+    }
+    #[doc = " Derives the account discriminator from the account name as Anchor does."]
+    #[doc = " Accounts are PascalCase."]
+    pub fn account_discriminator(name: &str) -> [u8; 8] {
+        let name = name.to_pascal_case();
+        sighash("account", &name)
+    }
+    #[doc = " Derives the instruction discriminator from the instruction name as Anchor does."]
+    #[doc = " Instructions are snake_case."]
+    pub fn instruction_discriminator(name: &str) -> [u8; 8] {
+        let name = name.to_snake_case();
+        sighash("global", &name)
+    }
+    #[macro_export]
+    macro_rules ! derive_account_type { ($ vis : vis enum $ ident : ident { $ ($ variant : ident ($ account_type : ty)) ,*$ (,) ? }) => { # [repr (C)] # [derive (Clone)] # [derive (anchor_lang :: prelude :: AnchorDeserialize , anchor_lang :: prelude :: AnchorSerialize)] $ vis enum $ ident { $ ($ variant ($ account_type) ,) * } impl Decode for $ ident { fn decode (data : & [u8]) -> std :: result :: Result < Self , Box < dyn std :: error :: Error >> { let discrim : & [u8 ; 8] = data [.. 8] . try_into () . map_err (| e | { Box :: new (std :: io :: Error :: new (std :: io :: ErrorKind :: Other , "Instruction data is not 8 bytes or more" . to_string ())) }) ?; match discrim { $ ($ variant if discrim == & account_discriminator (& ident_name ::<$ account_type > ()) => { let acct = <$ account_type >:: try_from_slice (& data [8 ..]) ?; Ok (Self ::$ variant (acct . clone ())) } ,) * _ => Err (Box :: new (std :: io :: Error :: new (std :: io :: ErrorKind :: Other , "Invalid account discriminator" . to_string ()))) } } } impl NameToDiscrim for $ ident { fn name_to_discrim (name : & str) -> std :: result :: Result < [u8 ; 8] , Box < dyn std :: error :: Error >> { match name { $ ($ variant if name == ident_name ::<$ account_type > () => { let discrim = account_discriminator (& ident_name ::<$ account_type > ()) ; Ok (discrim) } ,) * _ => Err (Box :: new (std :: io :: Error :: new (std :: io :: ErrorKind :: Other , "Invalid account name" . to_string ()))) } } } impl DiscrimToName for $ ident { fn discrim_to_name (discrim : [u8 ; 8]) -> std :: result :: Result < String , Box < dyn std :: error :: Error >> { match discrim { $ ($ variant if discrim == account_discriminator (& ident_name ::<$ account_type > ()) => { let name = ident_name ::<$ account_type > () ; Ok (name) } ,) * _ => Err (Box :: new (std :: io :: Error :: new (std :: io :: ErrorKind :: Other , "Invalid account discriminator" . to_string ()))) } } } } ; }
+    #[macro_export]
+    macro_rules ! derive_instruction_type { ($ vis : vis enum $ ident : ident { $ ($ variant : ident ($ ix_type : path)) ,*$ (,) ? }) => { # [derive (anchor_lang :: prelude :: AnchorSerialize , anchor_lang :: prelude :: AnchorDeserialize)] $ vis enum $ ident { $ ($ variant ($ ix_type) ,) * } impl Decode for $ ident { fn decode (data : & [u8]) -> std :: result :: Result < Self , Box < dyn std :: error :: Error >> { let discrim : & [u8 ; 8] = data [.. 8] . try_into () . map_err (| e | { Box :: new (std :: io :: Error :: new (std :: io :: ErrorKind :: Other , "Instruction data is not 8 bytes or more" . to_string ())) }) ?; match discrim { $ ($ variant if discrim == & instruction_discriminator (& ident_name ::<$ ix_type > ()) => { let ix = <$ ix_type >:: deserialize (& mut & data [8 ..]) ?; Ok (Self ::$ variant (ix)) } ,) * _ => Err (Box :: new (std :: io :: Error :: new (std :: io :: ErrorKind :: Other , "Invalid instruction discriminator" . to_string ()))) } } } impl NameToDiscrim for $ ident { fn name_to_discrim (name : & str) -> std :: result :: Result < [u8 ; 8] , Box < dyn std :: error :: Error >> { match name { $ ($ variant if name == ident_name ::<$ ix_type > () => { let discrim = instruction_discriminator (& ident_name ::<$ ix_type > ()) ; Ok (discrim) } ,) * _ => Err (Box :: new (std :: io :: Error :: new (std :: io :: ErrorKind :: Other , "Invalid instruction name" . to_string ()))) } } } impl DiscrimToName for $ ident { fn discrim_to_name (discrim : [u8 ; 8]) -> std :: result :: Result < String , Box < dyn std :: error :: Error >> { match discrim { $ ($ variant if discrim == instruction_discriminator (& ident_name ::<$ ix_type > ()) => { let name = ident_name ::<$ ix_type > () ; Ok (name) } ,) * _ => Err (Box :: new (std :: io :: Error :: new (std :: io :: ErrorKind :: Other , "Invalid instruction discriminator" . to_string ()))) } } } } ; }
+}
 pub mod instructions {
     #![doc = r" IDL instruction types"]
-    use super::{types::*, *};
+    use super::{decode::*, types::*, *};
     #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
     pub struct InitializeUser {
         pub sub_account_id: u16,
@@ -2013,6 +2072,7 @@ pub mod instructions {
     }
     #[automatically_derived]
     impl anchor_lang::InstructionData for UpdateProtectedMakerModeConfig {}
+    # [rustfmt :: skip] crate :: derive_instruction_type ! (pub enum InstructionType { InitializeUser (InitializeUser) , InitializeUserStats (InitializeUserStats) , InitializeRfqUser (InitializeRfqUser) , InitializeSwiftUserOrders (InitializeSwiftUserOrders) , ResizeSwiftUserOrders (ResizeSwiftUserOrders) , InitializeReferrerName (InitializeReferrerName) , Deposit (Deposit) , Withdraw (Withdraw) , TransferDeposit (TransferDeposit) , PlacePerpOrder (PlacePerpOrder) , CancelOrder (CancelOrder) , CancelOrderByUserId (CancelOrderByUserId) , CancelOrders (CancelOrders) , CancelOrdersByIds (CancelOrdersByIds) , ModifyOrder (ModifyOrder) , ModifyOrderByUserId (ModifyOrderByUserId) , PlaceAndTakePerpOrder (PlaceAndTakePerpOrder) , PlaceAndMakePerpOrder (PlaceAndMakePerpOrder) , PlaceAndMakeSwiftPerpOrder (PlaceAndMakeSwiftPerpOrder) , PlaceSwiftTakerOrder (PlaceSwiftTakerOrder) , PlaceAndMatchRfqOrders (PlaceAndMatchRfqOrders) , PlaceSpotOrder (PlaceSpotOrder) , PlaceAndTakeSpotOrder (PlaceAndTakeSpotOrder) , PlaceAndMakeSpotOrder (PlaceAndMakeSpotOrder) , PlaceOrders (PlaceOrders) , BeginSwap (BeginSwap) , EndSwap (EndSwap) , AddPerpLpShares (AddPerpLpShares) , RemovePerpLpShares (RemovePerpLpShares) , RemovePerpLpSharesInExpiringMarket (RemovePerpLpSharesInExpiringMarket) , UpdateUserName (UpdateUserName) , UpdateUserCustomMarginRatio (UpdateUserCustomMarginRatio) , UpdateUserMarginTradingEnabled (UpdateUserMarginTradingEnabled) , UpdateUserPoolId (UpdateUserPoolId) , UpdateUserDelegate (UpdateUserDelegate) , UpdateUserReduceOnly (UpdateUserReduceOnly) , UpdateUserAdvancedLp (UpdateUserAdvancedLp) , UpdateUserProtectedMakerOrders (UpdateUserProtectedMakerOrders) , DeleteUser (DeleteUser) , ForceDeleteUser (ForceDeleteUser) , DeleteSwiftUserOrders (DeleteSwiftUserOrders) , ReclaimRent (ReclaimRent) , EnableUserHighLeverageMode (EnableUserHighLeverageMode) , FillPerpOrder (FillPerpOrder) , RevertFill (RevertFill) , FillSpotOrder (FillSpotOrder) , TriggerOrder (TriggerOrder) , ForceCancelOrders (ForceCancelOrders) , UpdateUserIdle (UpdateUserIdle) , LogUserBalances (LogUserBalances) , DisableUserHighLeverageMode (DisableUserHighLeverageMode) , UpdateUserFuelBonus (UpdateUserFuelBonus) , UpdateUserStatsReferrerStatus (UpdateUserStatsReferrerStatus) , UpdateUserOpenOrdersCount (UpdateUserOpenOrdersCount) , AdminDisableUpdatePerpBidAskTwap (AdminDisableUpdatePerpBidAskTwap) , SettlePnl (SettlePnl) , SettleMultiplePnls (SettleMultiplePnls) , SettleFundingPayment (SettleFundingPayment) , SettleLp (SettleLp) , SettleExpiredMarket (SettleExpiredMarket) , LiquidatePerp (LiquidatePerp) , LiquidatePerpWithFill (LiquidatePerpWithFill) , LiquidateSpot (LiquidateSpot) , LiquidateBorrowForPerpPnl (LiquidateBorrowForPerpPnl) , LiquidatePerpPnlForDeposit (LiquidatePerpPnlForDeposit) , SetUserStatusToBeingLiquidated (SetUserStatusToBeingLiquidated) , ResolvePerpPnlDeficit (ResolvePerpPnlDeficit) , ResolvePerpBankruptcy (ResolvePerpBankruptcy) , ResolveSpotBankruptcy (ResolveSpotBankruptcy) , SettleRevenueToInsuranceFund (SettleRevenueToInsuranceFund) , UpdateFundingRate (UpdateFundingRate) , UpdatePrelaunchOracle (UpdatePrelaunchOracle) , UpdatePerpBidAskTwap (UpdatePerpBidAskTwap) , UpdateSpotMarketCumulativeInterest (UpdateSpotMarketCumulativeInterest) , UpdateAmms (UpdateAmms) , UpdateSpotMarketExpiry (UpdateSpotMarketExpiry) , UpdateUserQuoteAssetInsuranceStake (UpdateUserQuoteAssetInsuranceStake) , UpdateUserGovTokenInsuranceStake (UpdateUserGovTokenInsuranceStake) , UpdateUserGovTokenInsuranceStakeDevnet (UpdateUserGovTokenInsuranceStakeDevnet) , InitializeInsuranceFundStake (InitializeInsuranceFundStake) , AddInsuranceFundStake (AddInsuranceFundStake) , RequestRemoveInsuranceFundStake (RequestRemoveInsuranceFundStake) , CancelRequestRemoveInsuranceFundStake (CancelRequestRemoveInsuranceFundStake) , RemoveInsuranceFundStake (RemoveInsuranceFundStake) , TransferProtocolIfShares (TransferProtocolIfShares) , UpdatePythPullOracle (UpdatePythPullOracle) , PostPythPullOracleUpdateAtomic (PostPythPullOracleUpdateAtomic) , PostMultiPythPullOracleUpdatesAtomic (PostMultiPythPullOracleUpdatesAtomic) , Initialize (Initialize) , InitializeSpotMarket (InitializeSpotMarket) , DeleteInitializedSpotMarket (DeleteInitializedSpotMarket) , InitializeSerumFulfillmentConfig (InitializeSerumFulfillmentConfig) , UpdateSerumFulfillmentConfigStatus (UpdateSerumFulfillmentConfigStatus) , InitializeOpenbookV2FulfillmentConfig (InitializeOpenbookV2FulfillmentConfig) , OpenbookV2FulfillmentConfigStatus (OpenbookV2FulfillmentConfigStatus) , InitializePhoenixFulfillmentConfig (InitializePhoenixFulfillmentConfig) , PhoenixFulfillmentConfigStatus (PhoenixFulfillmentConfigStatus) , UpdateSerumVault (UpdateSerumVault) , InitializePerpMarket (InitializePerpMarket) , InitializePredictionMarket (InitializePredictionMarket) , DeleteInitializedPerpMarket (DeleteInitializedPerpMarket) , MoveAmmPrice (MoveAmmPrice) , RecenterPerpMarketAmm (RecenterPerpMarketAmm) , UpdatePerpMarketAmmSummaryStats (UpdatePerpMarketAmmSummaryStats) , UpdatePerpMarketExpiry (UpdatePerpMarketExpiry) , SettleExpiredMarketPoolsToRevenuePool (SettleExpiredMarketPoolsToRevenuePool) , DepositIntoPerpMarketFeePool (DepositIntoPerpMarketFeePool) , DepositIntoSpotMarketVault (DepositIntoSpotMarketVault) , DepositIntoSpotMarketRevenuePool (DepositIntoSpotMarketRevenuePool) , RepegAmmCurve (RepegAmmCurve) , UpdatePerpMarketAmmOracleTwap (UpdatePerpMarketAmmOracleTwap) , ResetPerpMarketAmmOracleTwap (ResetPerpMarketAmmOracleTwap) , UpdateK (UpdateK) , UpdatePerpMarketMarginRatio (UpdatePerpMarketMarginRatio) , UpdatePerpMarketHighLeverageMarginRatio (UpdatePerpMarketHighLeverageMarginRatio) , UpdatePerpMarketFundingPeriod (UpdatePerpMarketFundingPeriod) , UpdatePerpMarketMaxImbalances (UpdatePerpMarketMaxImbalances) , UpdatePerpMarketLiquidationFee (UpdatePerpMarketLiquidationFee) , UpdateInsuranceFundUnstakingPeriod (UpdateInsuranceFundUnstakingPeriod) , UpdateSpotMarketPoolId (UpdateSpotMarketPoolId) , UpdateSpotMarketLiquidationFee (UpdateSpotMarketLiquidationFee) , UpdateWithdrawGuardThreshold (UpdateWithdrawGuardThreshold) , UpdateSpotMarketIfFactor (UpdateSpotMarketIfFactor) , UpdateSpotMarketRevenueSettlePeriod (UpdateSpotMarketRevenueSettlePeriod) , UpdateSpotMarketStatus (UpdateSpotMarketStatus) , UpdateSpotMarketPausedOperations (UpdateSpotMarketPausedOperations) , UpdateSpotMarketAssetTier (UpdateSpotMarketAssetTier) , UpdateSpotMarketMarginWeights (UpdateSpotMarketMarginWeights) , UpdateSpotMarketBorrowRate (UpdateSpotMarketBorrowRate) , UpdateSpotMarketMaxTokenDeposits (UpdateSpotMarketMaxTokenDeposits) , UpdateSpotMarketMaxTokenBorrows (UpdateSpotMarketMaxTokenBorrows) , UpdateSpotMarketScaleInitialAssetWeightStart (UpdateSpotMarketScaleInitialAssetWeightStart) , UpdateSpotMarketOracle (UpdateSpotMarketOracle) , UpdateSpotMarketStepSizeAndTickSize (UpdateSpotMarketStepSizeAndTickSize) , UpdateSpotMarketMinOrderSize (UpdateSpotMarketMinOrderSize) , UpdateSpotMarketOrdersEnabled (UpdateSpotMarketOrdersEnabled) , UpdateSpotMarketIfPausedOperations (UpdateSpotMarketIfPausedOperations) , UpdateSpotMarketName (UpdateSpotMarketName) , UpdatePerpMarketStatus (UpdatePerpMarketStatus) , UpdatePerpMarketPausedOperations (UpdatePerpMarketPausedOperations) , UpdatePerpMarketContractTier (UpdatePerpMarketContractTier) , UpdatePerpMarketImfFactor (UpdatePerpMarketImfFactor) , UpdatePerpMarketUnrealizedAssetWeight (UpdatePerpMarketUnrealizedAssetWeight) , UpdatePerpMarketConcentrationCoef (UpdatePerpMarketConcentrationCoef) , UpdatePerpMarketCurveUpdateIntensity (UpdatePerpMarketCurveUpdateIntensity) , UpdatePerpMarketTargetBaseAssetAmountPerLp (UpdatePerpMarketTargetBaseAssetAmountPerLp) , UpdatePerpMarketPerLpBase (UpdatePerpMarketPerLpBase) , UpdateLpCooldownTime (UpdateLpCooldownTime) , UpdatePerpFeeStructure (UpdatePerpFeeStructure) , UpdateSpotFeeStructure (UpdateSpotFeeStructure) , UpdateInitialPctToLiquidate (UpdateInitialPctToLiquidate) , UpdateLiquidationDuration (UpdateLiquidationDuration) , UpdateLiquidationMarginBufferRatio (UpdateLiquidationMarginBufferRatio) , UpdateOracleGuardRails (UpdateOracleGuardRails) , UpdateStateSettlementDuration (UpdateStateSettlementDuration) , UpdateStateMaxNumberOfSubAccounts (UpdateStateMaxNumberOfSubAccounts) , UpdateStateMaxInitializeUserFee (UpdateStateMaxInitializeUserFee) , UpdatePerpMarketOracle (UpdatePerpMarketOracle) , UpdatePerpMarketBaseSpread (UpdatePerpMarketBaseSpread) , UpdateAmmJitIntensity (UpdateAmmJitIntensity) , UpdatePerpMarketMaxSpread (UpdatePerpMarketMaxSpread) , UpdatePerpMarketStepSizeAndTickSize (UpdatePerpMarketStepSizeAndTickSize) , UpdatePerpMarketName (UpdatePerpMarketName) , UpdatePerpMarketMinOrderSize (UpdatePerpMarketMinOrderSize) , UpdatePerpMarketMaxSlippageRatio (UpdatePerpMarketMaxSlippageRatio) , UpdatePerpMarketMaxFillReserveFraction (UpdatePerpMarketMaxFillReserveFraction) , UpdatePerpMarketMaxOpenInterest (UpdatePerpMarketMaxOpenInterest) , UpdatePerpMarketNumberOfUsers (UpdatePerpMarketNumberOfUsers) , UpdatePerpMarketFeeAdjustment (UpdatePerpMarketFeeAdjustment) , UpdateSpotMarketFeeAdjustment (UpdateSpotMarketFeeAdjustment) , UpdatePerpMarketFuel (UpdatePerpMarketFuel) , UpdateSpotMarketFuel (UpdateSpotMarketFuel) , InitUserFuel (InitUserFuel) , UpdateAdmin (UpdateAdmin) , UpdateWhitelistMint (UpdateWhitelistMint) , UpdateDiscountMint (UpdateDiscountMint) , UpdateExchangeStatus (UpdateExchangeStatus) , UpdatePerpAuctionDuration (UpdatePerpAuctionDuration) , UpdateSpotAuctionDuration (UpdateSpotAuctionDuration) , InitializeProtocolIfSharesTransferConfig (InitializeProtocolIfSharesTransferConfig) , UpdateProtocolIfSharesTransferConfig (UpdateProtocolIfSharesTransferConfig) , InitializePrelaunchOracle (InitializePrelaunchOracle) , UpdatePrelaunchOracleParams (UpdatePrelaunchOracleParams) , DeletePrelaunchOracle (DeletePrelaunchOracle) , InitializePythPullOracle (InitializePythPullOracle) , InitializePythLazerOracle (InitializePythLazerOracle) , PostPythLazerOracleUpdate (PostPythLazerOracleUpdate) , InitializeHighLeverageModeConfig (InitializeHighLeverageModeConfig) , UpdateHighLeverageModeConfig (UpdateHighLeverageModeConfig) , InitializeProtectedMakerModeConfig (InitializeProtectedMakerModeConfig) , UpdateProtectedMakerModeConfig (UpdateProtectedMakerModeConfig) }) ;
 }
 pub mod types {
     #![doc = r" IDL types"]
@@ -3873,7 +3933,7 @@ pub mod types {
 }
 pub mod accounts {
     #![doc = r" IDL Account types"]
-    use super::{types::*, *};
+    use super::{decode::*, types::*, *};
     #[repr(C)]
     #[derive(
         AnchorSerialize,
@@ -19681,6 +19741,7 @@ pub mod accounts {
                 .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotDeserialize.into())
         }
     }
+    # [rustfmt :: skip] crate :: derive_account_type ! (pub enum AccountType { OpenbookV2FulfillmentConfig (OpenbookV2FulfillmentConfig) , PhoenixV1FulfillmentConfig (PhoenixV1FulfillmentConfig) , SerumV3FulfillmentConfig (SerumV3FulfillmentConfig) , HighLeverageModeConfig (HighLeverageModeConfig) , InsuranceFundStake (InsuranceFundStake) , ProtocolIfSharesTransferConfig (ProtocolIfSharesTransferConfig) , PrelaunchOracle (PrelaunchOracle) , PerpMarket (PerpMarket) , ProtectedMakerModeConfig (ProtectedMakerModeConfig) , PythLazerOracle (PythLazerOracle) , RFQUser (RFQUser) , SpotMarket (SpotMarket) , State (State) , SwiftUserOrders (SwiftUserOrders) , User (User) , UserStats (UserStats) , ReferrerName (ReferrerName) , }) ;
 }
 pub mod errors {
     #![doc = r" IDL error types"]

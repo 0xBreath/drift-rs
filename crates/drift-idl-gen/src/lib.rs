@@ -1,3 +1,5 @@
+mod decode;
+
 use std::{
     fs::{self},
     io::Write,
@@ -6,10 +8,10 @@ use std::{
 };
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use serde::{Deserialize, Serialize};
-use sha2::Digest;
 use syn::{Ident, Type};
+use heck::{ToPascalCase, ToSnakeCase};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Idl {
@@ -199,7 +201,7 @@ fn generate_idl_types(idl: &Idl) -> String {
                                 let variant_name = Ident::new(name, proc_macro2::Span::call_site());
                                 let field_tokens = fields.iter().map(|field| {
                                     let field_name = Ident::new(
-                                        &to_snake_case(&field.name),
+                                        &field.name.to_snake_case(),
                                         proc_macro2::Span::call_site(),
                                     );
                                     let field_type: Type =
@@ -238,7 +240,7 @@ fn generate_idl_types(idl: &Idl) -> String {
                     Ident::new(type_def.name.as_str(), proc_macro2::Span::call_site());
                 let struct_fields = fields.iter().map(|field| {
                     let field_name =
-                        Ident::new(&to_snake_case(&field.name), proc_macro2::Span::call_site());
+                        Ident::new(&field.name.to_snake_case(), proc_macro2::Span::call_site());
                     let field_type: syn::Type =
                         syn::parse_str(&field.field_type.to_rust_type()).unwrap();
                     quote! {
@@ -273,7 +275,7 @@ fn generate_idl_types(idl: &Idl) -> String {
             .iter()
             .map(|field| {
                 let field_name =
-                    Ident::new(&to_snake_case(&field.name), proc_macro2::Span::call_site());
+                    Ident::new(&field.name.to_snake_case(), proc_macro2::Span::call_site());
                 if let ArgType::Vec { .. } = field.field_type {
                     has_vec_field = true;
                 }
@@ -323,7 +325,7 @@ fn generate_idl_types(idl: &Idl) -> String {
             Default::default()
         };
 
-        let discriminator: TokenStream = format!("{:?}", sighash("account", &account.name))
+        let discriminator: TokenStream = format!("{:?}", decode::sighash("account", &account.name))
             .parse()
             .unwrap();
         let struct_def = quote! {
@@ -378,17 +380,17 @@ fn generate_idl_types(idl: &Idl) -> String {
     // Generate structs for instructions
     for instr in &idl.instructions {
         let name = capitalize_first_letter(&instr.name);
-        let fn_name = to_snake_case(&instr.name);
+        let fn_name = &instr.name.to_snake_case();
         let struct_name = Ident::new(&name, proc_macro2::Span::call_site());
         let fields = instr.args.iter().map(|arg| {
-            let field_name = Ident::new(&to_snake_case(&arg.name), proc_macro2::Span::call_site());
+            let field_name = Ident::new(&arg.name.to_snake_case(), proc_macro2::Span::call_site());
             let field_type: Type = syn::parse_str(&arg.arg_type.to_rust_type()).unwrap();
             quote! {
                 pub #field_name: #field_type,
             }
         });
         // https://github.com/coral-xyz/anchor/blob/e48e7e60a64de77d878cdb063965cf125bec741a/lang/syn/src/codegen/program/instruction.rs#L32
-        let discriminator: TokenStream = format!("{:?}", sighash("global", &fn_name))
+        let discriminator: TokenStream = format!("{:?}", decode::sighash("global", &fn_name))
             .parse()
             .unwrap();
         let struct_def = quote! {
@@ -411,14 +413,14 @@ fn generate_idl_types(idl: &Idl) -> String {
 
         let accounts = instr.accounts.iter().map(|acc| {
             let account_name =
-                Ident::new(&to_snake_case(&acc.name), proc_macro2::Span::call_site());
+                Ident::new(&acc.name.to_snake_case(), proc_macro2::Span::call_site());
             quote! {
                 pub #account_name: Pubkey,
             }
         });
 
         let to_account_metas = instr.accounts.iter().map(|acc| {
-            let account_name_str = to_snake_case(&acc.name);
+            let account_name_str = acc.name.to_snake_case();
             let account_name =
                 Ident::new(&account_name_str, proc_macro2::Span::call_site());
             let is_mut: TokenStream = acc.is_mut.to_string().parse().unwrap();
@@ -429,7 +431,7 @@ fn generate_idl_types(idl: &Idl) -> String {
         });
 
         let discriminator: TokenStream =
-            format!("{:?}", sighash("account", &name)).parse().unwrap();
+            format!("{:?}", decode::sighash("account", &name)).parse().unwrap();
         let account_struct_def = quote! {
             #[repr(C)]
             #[derive(Copy, Clone, Default, AnchorSerialize, AnchorDeserialize, Serialize, Deserialize)]
@@ -496,6 +498,36 @@ fn generate_idl_types(idl: &Idl) -> String {
         };
     }
 
+    let ix_variants = instruction_types(&idl).into_iter().map(|ident| {
+        let variant_name = ident.clone();
+        quote! { #variant_name(#ident) }
+    });
+    instructions_tokens = quote! {
+        #instructions_tokens
+
+        #[rustfmt::skip]
+        crate::derive_instruction_type!(
+            pub enum InstructionType {
+                #(#ix_variants),*
+            }
+        );
+    };
+
+    let acct_variants = account_types(&idl).into_iter().map(|ident| {
+        let variant_name = ident.clone();
+        quote! { #variant_name(#ident) }
+    });
+    accounts_tokens = quote! {
+        #accounts_tokens
+
+        #[rustfmt::skip]
+        crate::derive_account_type!(
+            pub enum AccountType {
+                #(#acct_variants,)*
+            }
+        );
+    };
+
     // Generate enum for errors
     let error_variants = idl.errors.iter().map(|error| {
         let variant_name = Ident::new(&error.name, proc_macro2::Span::call_site());
@@ -524,7 +556,7 @@ fn generate_idl_types(idl: &Idl) -> String {
         let struct_name = Ident::new(&event.name, proc_macro2::Span::call_site());
         let fields = event.fields.iter().map(|field| {
             let field_name =
-                Ident::new(&to_snake_case(&field.name), proc_macro2::Span::call_site());
+                Ident::new(&field.name.to_snake_case(), proc_macro2::Span::call_site());
             let field_type: Type = syn::parse_str(&field.field_type.to_rust_type()).unwrap();
             quote! {
                 pub #field_name: #field_type,
@@ -547,7 +579,11 @@ fn generate_idl_types(idl: &Idl) -> String {
 
     let custom_types: TokenStream = include_str!("custom_types.rs")
         .parse()
-        .expect("custom_types valid rust");
+        .expect("custom_types.rs valid rust");
+
+    let decode: TokenStream = include_str!("decode.rs")
+        .parse()
+        .expect("decode.rs valid rust");
 
     // Wrap generated code in modules with necessary imports
     let output = quote! {
@@ -559,6 +595,8 @@ fn generate_idl_types(idl: &Idl) -> String {
         // use solana-sdk Pubkey, the vendored anchor-lang Pubkey maybe behind
         use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey};
         use serde::{Serialize, Deserialize};
+        use heck::{ToPascalCase, ToSnakeCase};
+        use sha2::Digest;
 
         use self::traits::ToAccountMetas;
         pub mod traits {
@@ -571,9 +609,15 @@ fn generate_idl_types(idl: &Idl) -> String {
             }
         }
 
+        pub mod decode {
+            use super::{*, types::*};
+
+            #decode
+        }
+
         pub mod instructions {
             //! IDL instruction types
-            use super::{*, types::*};
+            use super::{*, types::*, decode::*};
 
             #instructions_tokens
         }
@@ -590,7 +634,7 @@ fn generate_idl_types(idl: &Idl) -> String {
 
         pub mod accounts {
             //! IDL Account types
-            use super::{*, types::*};
+            use super::{*, types::*, decode::*};
 
             #accounts_tokens
         }
@@ -612,30 +656,14 @@ fn generate_idl_types(idl: &Idl) -> String {
     output.to_string()
 }
 
-fn sighash(namespace: &str, name: &str) -> [u8; 8] {
-    let preimage = format!("{namespace}:{name}");
-    let mut hasher = sha2::Sha256::default();
-    let mut sighash = <[u8; 8]>::default();
-    hasher.update(preimage.as_bytes());
-    let digest = hasher.finalize();
-    sighash.copy_from_slice(&digest.as_slice()[..8]);
-
-    sighash
+fn account_types(idl: &Idl) -> Vec<Ident> {
+    let acct_idents: Vec<Ident> = idl.accounts.iter().map(|d| format_ident!("{}", d.name)).collect();
+    acct_idents
 }
 
-fn to_snake_case(s: &str) -> String {
-    let mut snake_case = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if c.is_uppercase() {
-            if i != 0 {
-                snake_case.push('_');
-            }
-            snake_case.push(c.to_ascii_lowercase());
-        } else {
-            snake_case.push(c);
-        }
-    }
-    snake_case
+fn instruction_types(idl: &Idl) -> Vec<Ident> {
+    let ix_idents: Vec<Ident> = idl.instructions.iter().map(|d| format_ident!("{}", d.name.to_pascal_case())).collect();
+    ix_idents
 }
 
 fn capitalize_first_letter(s: &str) -> String {

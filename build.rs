@@ -17,10 +17,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Only build FFI lib if static or no lib path provided
     if should_build_from_source() {
+        println!("cargo:warning=BUILDING FFI FROM SOURCE");
         build_ffi_lib(&current_dir)?;
+        println!("cargo:warning=BUILT FFI");
     }
 
+    println!("cargo:warning=LINKING LIB");
     link_library()?;
+    println!("cargo:warning=LINKED LIB");
     Ok(())
 }
 
@@ -30,14 +34,14 @@ fn generate_idl_types(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let idl_mod_rs = drift_idl_gen::generate_rust_types(&idl_source_path)
         .map_err(|err| format!("generating IDL failed: {err:?}"))?;
-
     std::fs::write(&idl_mod_path, idl_mod_rs)?;
     Ok(())
 }
 
 fn should_build_from_source() -> bool {
+    // std::env::var("CARGO_DRIFT_FFI_STATIC").is_ok()
+    //     || std::env::var("CARGO_DRIFT_FFI_PATH").is_err()
     std::env::var("CARGO_DRIFT_FFI_STATIC").is_ok()
-        || std::env::var("CARGO_DRIFT_FFI_PATH").is_err()
 }
 
 fn build_ffi_lib(current_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -51,9 +55,15 @@ fn build_ffi_lib(current_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     // Build the library
     let profile = std::env::var("PROFILE")?;
     let drift_ffi_sys_crate = current_dir.join("crates/drift-ffi-sys");
+    println!(
+        "cargo:warning=drift_ffi_sys_crate: {:?}",
+        drift_ffi_sys_crate
+    );
 
     build_with_toolchain(&drift_ffi_sys_crate, lib_target, &profile)?;
+    println!("cargo:warning=BUILT WITH TOOLCHAIN");
     install_library(&drift_ffi_sys_crate, &profile, lib_ext)?;
+    println!("cargo:warning=INSTALLED LIB");
 
     Ok(())
 }
@@ -113,7 +123,9 @@ fn build_with_toolchain(
         .args(["run", &ffi_toolchain, "cargo", "build"]);
 
     match profile {
-        "debug" => (),
+        "debug" => {
+            ffi_build.arg("-vv");
+        }
         "release" => {
             ffi_build.arg("--release");
         }
@@ -121,8 +133,10 @@ fn build_with_toolchain(
             ffi_build.arg(format!("--profile={custom}"));
         }
     }
+    println!("cargo:warning=ffi build command: {ffi_build:?}");
 
     let output = ffi_build.output()?;
+    println!("cargo:warning=ffi build output: {:#?}", output);
     if !output.status.success() {
         println!("cargo:warning={}", String::from_utf8_lossy(&output.stderr));
         return Err("FFI build failed".into());

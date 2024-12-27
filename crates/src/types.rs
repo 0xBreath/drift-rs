@@ -85,7 +85,7 @@ impl Context {
     }
 }
 
-/// Some data from chain along with the retreived slot
+/// Some data from chain along with the retrieved slot
 #[derive(Debug, Clone)]
 pub struct DataAndSlot<T> {
     pub slot: u64,
