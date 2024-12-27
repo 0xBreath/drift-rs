@@ -9,22 +9,17 @@ const FFI_TOOLCHAIN_VERSION: &str = "1.76.0";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let current_dir = std::env::current_dir()?.canonicalize()?;
-
-    // Generate IDL types from 'res/drift.json'
+    // Generate ID types from 'res/drift.json'
     let idl_source_path = current_dir.join("res/drift.json");
     let idl_mod_path = current_dir.join("crates/src/drift_idl.rs");
     generate_idl_types(&idl_source_path, idl_mod_path.as_path())?;
-
     // Only build FFI lib if static or no lib path provided
     if should_build_from_source() {
         println!("cargo:warning=BUILDING FFI FROM SOURCE");
         build_ffi_lib(&current_dir)?;
         println!("cargo:warning=BUILT FFI");
     }
-
-    println!("cargo:warning=LINKING LIB");
     link_library()?;
-    println!("cargo:warning=LINKED LIB");
     Ok(())
 }
 
@@ -55,15 +50,9 @@ fn build_ffi_lib(current_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     // Build the library
     let profile = std::env::var("PROFILE")?;
     let drift_ffi_sys_crate = current_dir.join("crates/drift-ffi-sys");
-    println!(
-        "cargo:warning=drift_ffi_sys_crate: {:?}",
-        drift_ffi_sys_crate
-    );
 
     build_with_toolchain(&drift_ffi_sys_crate, lib_target, &profile)?;
-    println!("cargo:warning=BUILT WITH TOOLCHAIN");
     install_library(&drift_ffi_sys_crate, &profile, lib_ext)?;
-    println!("cargo:warning=INSTALLED LIB");
 
     Ok(())
 }

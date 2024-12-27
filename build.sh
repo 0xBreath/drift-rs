@@ -21,4 +21,5 @@ avm use 0.30.0
 #export CARGO_DRIFT_FFI_PATH="/target/release/libdrift_ffi_sys"
 
 #CXX=/opt/homebrew/bin/c++-14 cargo build --release || exit 1
-cargo build -vv || exit 1
+#cargo build -vv || exit 1
+cargo build || exit 1
