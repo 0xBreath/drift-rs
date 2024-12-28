@@ -20,6 +20,7 @@ path = "crates/src/lib.rs"
 dlob = ["rayon"]
 # run integration tests against RPC nodes
 rpc_tests = []
+default = []
 
 [dependencies]
 abi_stable = "0.11"
@@ -44,6 +45,8 @@ tokio = { version = "1.40", features = ["full"] }
 type-layout = "0.2.0"
 sha2 = "0.10"
 heck = "0.5.0"
+yellowstone-grpc-client = "1.12.0"
+yellowstone-grpc-proto = { version = "1.11.0", default-features = false }
 
 [dev-dependencies]
 bytes = "1"
@@ -53,8 +56,8 @@ hex-literal = "0.4"
 [build-dependencies]
 drift-idl-gen = { version = "0.1.2", path = "crates/drift-idl-gen"}
 
-[profile.release]
-lto = true
-
-[profile.dev]
-lto = false
+#[profile.release]
+#lto = true
+#
+#[profile.dev]
+#lto = false

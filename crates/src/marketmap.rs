@@ -372,7 +372,7 @@ mod tests {
 
 #[cfg(feature = "rpc_tests")]
 mod rpc_tests {
-    use solana_sdk::commitment_config::CommitmentLevel;
+    use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 
     use super::*;
     use crate::utils::test_envs::mainnet_endpoint;
