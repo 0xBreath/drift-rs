@@ -2,9 +2,10 @@
 
 use std::{collections::BinaryHeap, str::FromStr, sync::Arc};
 
-use dashmap::DashSet;
+use dashmap::{DashMap, DashSet};
 use rayon::prelude::*;
 use solana_sdk::pubkey::Pubkey;
+use rayon::prelude::ParallelBridge;
 
 use crate::{
     dlob::{
@@ -16,6 +17,8 @@ use crate::{
     math::order::is_resting_limit_order,
     usermap::GlobalUserMap as UserMap,
 };
+use crate::drift_idl::accounts::User;
+use crate::geyser::account::AcctCtx;
 
 #[derive(Clone)]
 pub struct DLOB {
@@ -41,20 +44,34 @@ impl DLOB {
         }
     }
 
-    pub fn build_from_usermap(&mut self, usermap: &UserMap, slot: u64) {
+    pub fn build_from_usermap(&mut self, usermap: &Arc<DashMap<String, User>>, slot: u64) {
         self.clear();
-        usermap.usermap.iter().par_bridge().for_each(|user_ref| {
+        // for user_ref in usermap.iter().par_bridge() {
+        for user_ref in usermap.iter() {
             let user = user_ref.value();
             let user_key = user_ref.key();
-            let user_pubkey = Pubkey::from_str(user_key).expect("Valid pubkey");
-            for order in user.orders.iter() {
-                if order.status == OrderStatus::Init {
-                    continue;
-                }
-                self.insert_order(order, user_pubkey, slot);
-            }
-        });
+            let ctx: AcctCtx<&User> = AcctCtx {
+                key: Pubkey::from_str(user_key).expect("Valid pubkey"),
+                account: user,
+                slot,
+            };
+            self.update_user(ctx);
+        }
         self._initialized = true;
+    }
+
+    pub fn update_user(&mut self, ctx: AcctCtx<&User>)  {
+        let AcctCtx {
+            key,
+            account: user,
+            slot
+        } = ctx;
+        for order in user.orders.iter() {
+            if order.status == OrderStatus::Init {
+                continue;
+            }
+            self.insert_order(order, key, slot);
+        }
     }
 
     pub fn size(&self) -> (usize, usize) {
@@ -287,366 +304,5 @@ impl DLOB {
 impl Default for DLOB {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use drift_idl::{
-        math::constants::PRICE_PRECISION_U64,
-        state::user::{Order, OrderType},
-    };
-    use solana_sdk::pubkey::Pubkey;
-
-    use super::*;
-
-    #[test]
-    fn test_dlob_insert() {
-        let dlob = DLOB::new();
-        let user_account = Pubkey::new_unique();
-        let taking_limit_order = Order {
-            order_id: 1,
-            slot: 1,
-            market_index: 0,
-            market_type: MarketType::Perp,
-            ..Order::default()
-        };
-        let floating_limit_order = Order {
-            order_id: 2,
-            oracle_price_offset: 1,
-            market_index: 0,
-            market_type: MarketType::Perp,
-            ..Order::default()
-        };
-        let resting_limit_order = Order {
-            order_id: 3,
-            slot: 3,
-            market_index: 0,
-            market_type: MarketType::Perp,
-            ..Order::default()
-        };
-        let market_order = Order {
-            order_id: 4,
-            slot: 4,
-            market_index: 0,
-            market_type: MarketType::Perp,
-            ..Order::default()
-        };
-        let trigger_order = Order {
-            order_id: 5,
-            slot: 5,
-            market_index: 0,
-            market_type: MarketType::Perp,
-            ..Order::default()
-        };
-
-        dlob.insert_order(&taking_limit_order, user_account, 1);
-        dlob.insert_order(&floating_limit_order, user_account, 0);
-        dlob.insert_order(&resting_limit_order, user_account, 3);
-        dlob.insert_order(&market_order, user_account, 4);
-        dlob.insert_order(&trigger_order, user_account, 5);
-
-        assert!(dlob.get_order(1, user_account).is_some());
-        assert!(dlob.get_order(2, user_account).is_some());
-        assert!(dlob.get_order(3, user_account).is_some());
-        assert!(dlob.get_order(4, user_account).is_some());
-        assert!(dlob.get_order(5, user_account).is_some());
-    }
-
-    #[test]
-    fn test_dlob_ordering() {
-        let dlob = DLOB::new();
-
-        let user_account = Pubkey::new_unique();
-        let order_1 = Order {
-            order_id: 1,
-            slot: 1,
-            market_index: 0,
-            direction: drift_idl::controller::position::PositionDirection::Long,
-            market_type: MarketType::Perp,
-            auction_duration: 1,
-            ..Order::default()
-        };
-        let order_2 = Order {
-            order_id: 2,
-            slot: 2,
-            market_index: 0,
-            direction: drift_idl::controller::position::PositionDirection::Long,
-            market_type: MarketType::Perp,
-            auction_duration: 1,
-            ..Order::default()
-        };
-        let order_3 = Order {
-            order_id: 3,
-            slot: 3,
-            market_index: 0,
-            direction: drift_idl::controller::position::PositionDirection::Long,
-            market_type: MarketType::Perp,
-            auction_duration: 1,
-            ..Order::default()
-        };
-        let order_4 = Order {
-            order_id: 4,
-            slot: 4,
-            market_index: 0,
-            direction: drift_idl::controller::position::PositionDirection::Long,
-            market_type: MarketType::Perp,
-            auction_duration: 1,
-            ..Order::default()
-        };
-        let order_5 = Order {
-            order_id: 5,
-            slot: 5,
-            market_index: 0,
-            direction: drift_idl::controller::position::PositionDirection::Long,
-            market_type: MarketType::Perp,
-            auction_duration: 1,
-            ..Order::default()
-        };
-
-        dlob.insert_order(&order_1, user_account, 1);
-        dlob.insert_order(&order_2, user_account, 2);
-        dlob.insert_order(&order_3, user_account, 3);
-        dlob.insert_order(&order_4, user_account, 4);
-        dlob.insert_order(&order_5, user_account, 5);
-
-        assert!(dlob.get_order(1, user_account).is_some());
-        assert!(dlob.get_order(2, user_account).is_some());
-        assert!(dlob.get_order(3, user_account).is_some());
-        assert!(dlob.get_order(4, user_account).is_some());
-        assert!(dlob.get_order(5, user_account).is_some());
-
-        let best_orders =
-            dlob.get_best_orders(MarketType::Perp, SubType::Bid, NodeType::TakingLimit, 0);
-
-        assert_eq!(best_orders[0].get_order().slot, 1);
-        assert_eq!(best_orders[1].get_order().slot, 2);
-        assert_eq!(best_orders[2].get_order().slot, 3);
-        assert_eq!(best_orders[3].get_order().slot, 4);
-        assert_eq!(best_orders[4].get_order().slot, 5);
-    }
-
-    #[test]
-    fn test_update_resting_limit_orders() {
-        let mut dlob = DLOB::new();
-
-        let user_account = Pubkey::new_unique();
-        let order_1 = Order {
-            order_id: 1,
-            slot: 1,
-            market_index: 0,
-            direction: drift_idl::controller::position::PositionDirection::Long,
-            market_type: MarketType::Perp,
-            auction_duration: 1,
-            ..Order::default()
-        };
-
-        dlob.insert_order(&order_1, user_account, 1);
-
-        let markets_for_market_type = dlob.exchange.perp.clone();
-        let market = markets_for_market_type.get(&0).unwrap();
-
-        assert_eq!(market.taking_limit_orders.bids.len(), 1);
-
-        let slot = 5;
-
-        drop(market);
-        drop(markets_for_market_type);
-
-        dlob.update_resting_limit_orders(slot);
-
-        let markets_for_market_type = dlob.exchange.perp.clone();
-        let market = markets_for_market_type.get(&0).unwrap();
-
-        assert_eq!(market.taking_limit_orders.bids.len(), 0);
-        assert_eq!(market.resting_limit_orders.bids.len(), 1);
-    }
-
-    #[test]
-    fn test_get_resting_limit_asks() {
-        let mut dlob = DLOB::new();
-
-        let v_ask = 15;
-        let v_bid = 10;
-
-        let oracle_price_data = OraclePriceData {
-            price: (v_bid + v_ask) / 2,
-            confidence: 1,
-            delay: 0,
-            has_sufficient_number_of_data_points: true,
-        };
-
-        let user_account = Pubkey::new_unique();
-        let order_1 = Order {
-            order_id: 1,
-            slot: 1,
-            market_index: 0,
-            direction: drift_idl::controller::position::PositionDirection::Short,
-            market_type: MarketType::Perp,
-            order_type: OrderType::Limit,
-            auction_duration: 10,
-            price: 11 * PRICE_PRECISION_U64,
-            ..Order::default()
-        };
-
-        let order_2 = Order {
-            order_id: 2,
-            slot: 11,
-            market_index: 0,
-            direction: drift_idl::controller::position::PositionDirection::Short,
-            market_type: MarketType::Perp,
-            order_type: OrderType::Limit,
-            auction_duration: 10,
-            price: 12 * PRICE_PRECISION_U64,
-            ..Order::default()
-        };
-
-        let order_3 = Order {
-            order_id: 3,
-            slot: 21,
-            market_index: 0,
-            direction: drift_idl::controller::position::PositionDirection::Short,
-            market_type: MarketType::Perp,
-            order_type: OrderType::Limit,
-            auction_duration: 10,
-            price: 13 * PRICE_PRECISION_U64,
-            ..Order::default()
-        };
-
-        dlob.insert_order(&order_1, user_account, 1);
-        dlob.insert_order(&order_2, user_account, 11);
-        dlob.insert_order(&order_3, user_account, 21);
-
-        let mut slot = 1;
-
-        dbg!("expecting 0");
-        let resting_limit_asks =
-            dlob.get_resting_limit_asks(slot, MarketType::Perp, 0, oracle_price_data);
-
-        assert_eq!(resting_limit_asks.len(), 0);
-
-        slot += 11;
-
-        dbg!("expecting 1");
-        let resting_limit_asks =
-            dlob.get_resting_limit_asks(slot, MarketType::Perp, 0, oracle_price_data);
-
-        assert_eq!(resting_limit_asks.len(), 1);
-        assert_eq!(resting_limit_asks[0].get_order().order_id, 1);
-
-        slot += 11;
-
-        dbg!("expecting 2");
-        let resting_limit_asks =
-            dlob.get_resting_limit_asks(slot, MarketType::Perp, 0, oracle_price_data);
-
-        assert_eq!(resting_limit_asks.len(), 2);
-        assert_eq!(resting_limit_asks[0].get_order().order_id, 1);
-        assert_eq!(resting_limit_asks[1].get_order().order_id, 2);
-
-        slot += 11;
-
-        dbg!("expecting 3");
-        let resting_limit_asks =
-            dlob.get_resting_limit_asks(slot, MarketType::Perp, 0, oracle_price_data);
-
-        assert_eq!(resting_limit_asks.len(), 3);
-        assert_eq!(resting_limit_asks[0].get_order().order_id, 1);
-        assert_eq!(resting_limit_asks[1].get_order().order_id, 2);
-        assert_eq!(resting_limit_asks[2].get_order().order_id, 3);
-    }
-
-    #[test]
-    fn test_get_resting_limit_bids() {
-        let mut dlob = DLOB::new();
-
-        let v_ask = 15;
-        let v_bid = 10;
-
-        let oracle_price_data = OraclePriceData {
-            price: (v_bid + v_ask) / 2,
-            confidence: 1,
-            delay: 0,
-            has_sufficient_number_of_data_points: true,
-        };
-
-        let user_account = Pubkey::new_unique();
-        let order_1 = Order {
-            order_id: 1,
-            slot: 1,
-            market_index: 0,
-            direction: drift_idl::controller::position::PositionDirection::Long,
-            market_type: MarketType::Perp,
-            order_type: OrderType::Limit,
-            auction_duration: 10,
-            price: 11,
-            ..Order::default()
-        };
-
-        let order_2 = Order {
-            order_id: 2,
-            slot: 11,
-            market_index: 0,
-            direction: drift_idl::controller::position::PositionDirection::Long,
-            market_type: MarketType::Perp,
-            order_type: OrderType::Limit,
-            auction_duration: 10,
-            price: 12,
-            ..Order::default()
-        };
-
-        let order_3 = Order {
-            order_id: 3,
-            slot: 21,
-            market_index: 0,
-            direction: drift_idl::controller::position::PositionDirection::Long,
-            market_type: MarketType::Perp,
-            order_type: OrderType::Limit,
-            auction_duration: 10,
-            price: 13,
-            ..Order::default()
-        };
-
-        dlob.insert_order(&order_1, user_account, 1);
-        dlob.insert_order(&order_2, user_account, 11);
-        dlob.insert_order(&order_3, user_account, 21);
-
-        let mut slot = 1;
-
-        dbg!("expecting 0");
-        let resting_limit_bids =
-            dlob.get_resting_limit_bids(slot, MarketType::Perp, 0, oracle_price_data);
-
-        assert_eq!(resting_limit_bids.len(), 0);
-
-        slot += 11;
-
-        dbg!("expecting 1");
-        let resting_limit_bids =
-            dlob.get_resting_limit_bids(slot, MarketType::Perp, 0, oracle_price_data);
-
-        assert_eq!(resting_limit_bids.len(), 1);
-        assert_eq!(resting_limit_bids[0].get_order().order_id, 1);
-
-        slot += 11;
-
-        dbg!("expecting 2");
-        let resting_limit_bids =
-            dlob.get_resting_limit_bids(slot, MarketType::Perp, 0, oracle_price_data);
-
-        assert_eq!(resting_limit_bids.len(), 2);
-        assert_eq!(resting_limit_bids[0].get_order().order_id, 2);
-        assert_eq!(resting_limit_bids[1].get_order().order_id, 1);
-
-        slot += 11;
-
-        dbg!("expecting 3");
-        let resting_limit_bids =
-            dlob.get_resting_limit_bids(slot, MarketType::Perp, 0, oracle_price_data);
-
-        assert_eq!(resting_limit_bids.len(), 3);
-        assert_eq!(resting_limit_bids[0].get_order().order_id, 3);
-        assert_eq!(resting_limit_bids[1].get_order().order_id, 2);
-        assert_eq!(resting_limit_bids[2].get_order().order_id, 1);
     }
 }

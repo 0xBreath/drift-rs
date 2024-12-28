@@ -69,8 +69,8 @@ pub mod usermap;
 // wrappers
 pub mod account_map;
 
-#[cfg(feature = "dlob")]
 pub mod dlob;
+pub mod geyser;
 
 /// DriftClient
 ///

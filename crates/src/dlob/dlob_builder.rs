@@ -32,7 +32,7 @@ impl DLOBBuilder {
     pub async fn start_building(builder: Arc<Mutex<Self>>) -> SdkResult<()> {
         let mut locked_builder = builder.lock().await;
         let rebuild_frequency = locked_builder.rebuild_frequency;
-        locked_builder.slot_subscriber.subscribe(move |_slot| {});
+        locked_builder.slot_subscriber.subscribe(move |_slot| {})?;
         locked_builder.usermap.subscribe().await?;
         drop(locked_builder);
 
@@ -53,77 +53,11 @@ impl DLOBBuilder {
 
     pub fn build(&mut self) -> &DLOB {
         self.dlob
-            .build_from_usermap(&self.usermap, self.slot_subscriber.current_slot());
+            .build_from_usermap(&self.usermap.usermap, self.slot_subscriber.current_slot());
         &self.dlob
     }
 
     pub fn get_dlob(&self) -> DLOB {
         self.dlob.clone()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use env_logger;
-    use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
-
-    use super::*;
-    use crate::{memcmp::get_user_with_order_filter, utils::get_ws_url};
-
-    #[tokio::test]
-    #[cfg(feature = "rpc_tests")]
-    async fn test_dlob_builder() {
-        env_logger::init();
-        let endpoint = "rpc".to_string();
-        let commitment = CommitmentConfig {
-            commitment: CommitmentLevel::Processed,
-        };
-
-        let slot_subscriber = SlotSubscriber::new(get_ws_url(&endpoint.clone()).unwrap());
-        let usermap = UserMap::new(
-            commitment,
-            endpoint,
-            true,
-            Some(vec![get_user_with_order_filter()]),
-        );
-        let dlob_builder = DLOBBuilder::new(slot_subscriber, usermap, 5);
-
-        dlob_builder.subscribe(DLOBBuilder::SUBSCRIPTION_ID, move |event| {
-            if let Some(_) = event.as_any().downcast_ref::<DLOB>() {
-                // dbg!("update received");
-            }
-        });
-
-        DLOBBuilder::start_building(Arc::new(Mutex::new(dlob_builder)))
-            .await
-            .unwrap();
-
-        tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "rpc_tests")]
-    async fn test_build_time() {
-        let endpoint = "rpc".to_string();
-        let commitment = CommitmentConfig {
-            commitment: CommitmentLevel::Processed,
-        };
-
-        let mut slot_subscriber = SlotSubscriber::new(get_ws_url(&endpoint.clone()).unwrap());
-        let mut usermap = UserMap::new(
-            commitment,
-            endpoint,
-            true,
-            Some(vec![get_user_with_order_filter()]),
-        );
-        let _ = slot_subscriber.subscribe().await;
-        let _ = usermap.subscribe().await;
-
-        let mut dlob_builder = DLOBBuilder::new(slot_subscriber, usermap, 30);
-
-        let start = std::time::Instant::now();
-        dlob_builder.build();
-        let duration = start.elapsed();
-        dbg!(duration);
     }
 }

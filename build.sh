@@ -1,3 +1,5 @@
+#!/bin/bash
+
 home() {
     cd "$(git rev-parse --show-toplevel)" || exit 1
 }
@@ -16,8 +18,10 @@ agave-install init 2.0.8 || exit 1
 
 avm use 0.30.0
 
-#export CARGO_DRIFT_FFI_STATIC=1
 # Provide a prebuilt drift_ffi_sys lib
-#export CARGO_DRIFT_FFI_PATH="/target/release/libdrift_ffi_sys"
+export CARGO_DRIFT_FFI_PATH="target/debug/libdrift_ffi_sys.dylib"
+#export CARGO_DRIFT_FFI_STATIC=1
 
-RUSTFLAGS="-Awarnings" cargo build || exit 1
+export CXX=/opt/homebrew/bin/c++-14
+
+cargo build > build.log 2>&1

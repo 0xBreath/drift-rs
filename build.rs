@@ -8,6 +8,7 @@ const SUPPORTED_PLATFORMS: &[(&str, &str, &str)] = &[
 const FFI_TOOLCHAIN_VERSION: &str = "1.76.0";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // println!("cargo:rerun-if-changed=res/drift.json");
     let current_dir = std::env::current_dir()?.canonicalize()?;
     // Generate ID types from 'res/drift.json'
     let idl_source_path = current_dir.join("res/drift.json");
@@ -34,9 +35,8 @@ fn generate_idl_types(
 }
 
 fn should_build_from_source() -> bool {
-    // std::env::var("CARGO_DRIFT_FFI_STATIC").is_ok()
-    //     || std::env::var("CARGO_DRIFT_FFI_PATH").is_err()
     std::env::var("CARGO_DRIFT_FFI_STATIC").is_ok()
+        || std::env::var("CARGO_DRIFT_FFI_PATH").is_err()
 }
 
 fn build_ffi_lib(current_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -169,6 +169,7 @@ fn install_library(
 
 fn link_library() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(lib_path) = std::env::var("CARGO_DRIFT_FFI_PATH") {
+        println!("cargo:warning={lib_path}: linking...");
         println!("cargo:rustc-link-search=native={lib_path}");
     }
     println!("cargo:rustc-link-lib=dylib=drift_ffi_sys");
